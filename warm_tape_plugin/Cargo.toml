@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug" }
-dsp_core = { path = "../dsp_core" }
+dsp-core = { path = "../dsp-core" }
 
 [profile.release]
 lto = true

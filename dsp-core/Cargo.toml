@@ -1,0 +1,22 @@
+[package]
+name = "dsp-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libm = { version = "0.2", optional = true }
+
+[dev-dependencies]
+
+[features]
+default = ["std"]
+std = []
+no_std = ["libm"]
+
+[[test]]
+name = "integration_tests"
+path = "tests/integration_tests.rs"
+
+[[test]]
+name = "stability_tests"
+path = "tests/stability_tests.rs"
