@@ -1,0 +1,3 @@
+[workspace]
+members = ["dsp_core", "rustrover_ai_plugin", "warm_tape_plugin"]
+resolver = "2"

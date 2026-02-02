@@ -1,0 +1,15 @@
+[package]
+name = "warm_tape_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug" }
+dsp_core = { path = "../dsp_core" }
+
+[profile.release]
+lto = true
+codegen-units = 1
