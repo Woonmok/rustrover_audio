@@ -2,12 +2,38 @@
 // Advanced FeatureAnalyzer + RIAA/Parallel Crossfade + Sample-Rate Specific
 
 use nih_plug::prelude::*;
-use dsp_core::{process_block, DspParams};
-use std::sync::Arc;
+use dsp_core::{
+    MagneticEQ,
+    ParallelFilterAdvanced,
+    RIAAEQAdvanced,
+    VelocityAnalyzer,
+    mix_dry_wet,
+};
+use std::{array, sync::Arc};
 
 pub struct RustroverAiPlugin {
     params: Arc<PluginParams>,
     sample_rate: f32,
+    channels: [ChannelDsp; 2],
+}
+
+struct ChannelDsp {
+    riaa: RIAAEQAdvanced,
+    parallel: ParallelFilterAdvanced,
+}
+
+impl ChannelDsp {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            riaa: RIAAEQAdvanced::new(sample_rate),
+            parallel: ParallelFilterAdvanced::new(0.0),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.riaa.reset();
+        self.parallel.reset();
+    }
 }
 
 #[derive(Params)]
@@ -72,9 +98,11 @@ impl Enum for PresetType {
 
 impl Default for RustroverAiPlugin {
     fn default() -> Self {
+        let sample_rate = 48000.0;
         Self {
             params: Arc::new(PluginParams::default()),
-            sample_rate: 48000.0,
+            sample_rate,
+            channels: array::from_fn(|_| ChannelDsp::new(sample_rate as u32)),
         }
     }
 }
@@ -152,11 +180,14 @@ impl Plugin for RustroverAiPlugin {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
+        self.channels = array::from_fn(|_| ChannelDsp::new(self.sample_rate as u32));
         true
     }
 
     fn reset(&mut self) {
-        // Reset DSP state (특허 구현 시 analyzer/filter 상태 리셋)
+        for channel in &mut self.channels {
+            channel.reset();
+        }
     }
 
     fn process(
@@ -169,27 +200,40 @@ impl Plugin for RustroverAiPlugin {
         let _preset = self.params.preset.value();
         let drive = self.params.drive.smoothed.next();
         let drywet = self.params.drywet.smoothed.next();
-        let _riaa_intensity = self.params.riaa_intensity.smoothed.next();
-        let _parallel_mix = self.params.parallel_mix.smoothed.next();
-        let _auto_velocity = self.params.auto_velocity.value();
+        let riaa_intensity = self.params.riaa_intensity.smoothed.next();
+        let parallel_mix = self.params.parallel_mix.smoothed.next();
+        let auto_velocity = self.params.auto_velocity.value();
 
-        let params = DspParams { drive_db: drive };
-        let sample_rate = self.sample_rate;
+        let drive_linear = db_to_linear(drive);
+        let saturation = ((drive - 1.0) / 9.0).clamp(0.0, 1.0);
+        let magnetic = MagneticEQ::new(saturation, 0.5);
 
-        // 특허 DSP 파이프라인 (현재는 간단한 dry/wet만 구현)
-        // TODO: dsp-core 통합 시:
-        // 1. AdvancedFeatureAnalyzer로 velocity 계산
-        // 2. velocity < 0.60 → MagneticEQ + Harmonics
-        // 3. velocity >= 0.60 → RIAA EQ (intensity 크로스페이드)
-        // 4. velocity < 0.50 → ParallelFilter HF Recovery
+        for (channel_idx, mut channel_samples) in buffer.iter_samples().enumerate() {
+            let velocity = if auto_velocity {
+                VelocityAnalyzer::calculate_velocity(channel_samples)
+            } else {
+                0.6
+            };
 
-        for mut channel_samples in buffer.iter_samples() {
-            let params = DspParams { drive_db: drive };
-            
+            let parallel_intensity = if velocity < 0.50 { parallel_mix } else { 0.0 };
+            self.channels[channel_idx]
+                .parallel
+                .set_intensity(parallel_intensity);
+
             for sample in channel_samples.iter_mut() {
-                let x = *sample * db_to_linear(drive);
-                let y = soft_clip(x);
-                *sample = y * drywet;
+                let dry = *sample;
+                let mut y = dry * drive_linear;
+                y = soft_clip(y);
+
+                if velocity < 0.60 {
+                    y = magnetic.process(y);
+                } else {
+                    let riaa = self.channels[channel_idx].riaa.process(y);
+                    y = mix_dry_wet(y, riaa, riaa_intensity);
+                }
+
+                y = self.channels[channel_idx].parallel.process(y);
+                *sample = mix_dry_wet(dry, y, drywet);
             }
         }
 
